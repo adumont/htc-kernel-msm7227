@@ -21,7 +21,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: linux_osl.c,v 1.125.12.3.8.7 2010/05/04 21:10:04 Exp $
+ * $Id: linux_osl.c,v 1.125.12.3.8.6 2009/12/09 01:29:03 Exp $
  */
 
 
@@ -157,6 +157,12 @@ osl_attach(void *pdev, uint bustype, bool pkttag)
 	osh = kmalloc(sizeof(osl_t), flags);
 	ASSERT(osh);
 
+#ifdef HTC_KlocWork
+    if(osh == NULL) {
+        myprintf("[HTCKW] osl_attach: osh == NULL\n");
+        return NULL;
+    }
+#endif
 	bzero(osh, sizeof(osl_t));
 
 	
@@ -193,10 +199,13 @@ osl_attach(void *pdev, uint bustype, bool pkttag)
 	if (!bcm_static_buf) {
 		if (!(bcm_static_buf = (bcm_static_buf_t *)dhd_os_prealloc(3, STATIC_BUF_SIZE+
 			STATIC_BUF_TOTAL_LEN))) {
-			printk("can not alloc static buf!\n");
+			myprintf("can not alloc static buf!\n");
+#ifdef HTC_KlocWork
+      return NULL;
+#endif
 		}
 		else {
-			/* printk("alloc static buf at %x!\n", (unsigned int)bcm_static_buf); */
+			/* myprintf("alloc static buf at %x!\n", (unsigned int)bcm_static_buf); */
 		}
 		
 		init_MUTEX(&bcm_static_buf->static_sem);
@@ -213,6 +222,9 @@ osl_attach(void *pdev, uint bustype, bool pkttag)
 		bcm_static_skb = (bcm_static_pkt_t *)((char *)bcm_static_buf + 2048);
 		skb_buff_ptr = dhd_os_prealloc(4, 0);
 
+#ifdef HTC_KlocWork
+    if(skb_buff_ptr != NULL)
+#endif
 		bcopy(skb_buff_ptr, bcm_static_skb, sizeof(struct sk_buff *)*16);
 		for (i = 0; i < MAX_STATIC_PKT_NUM*2; i++)
 			bcm_static_skb->pkt_use[i] = 0;
@@ -299,7 +311,7 @@ osl_pktget_static(osl_t *osh, uint len)
 	
 	if (len > (PAGE_SIZE*2))
 	{
-		printk("Do we really need this big skb??\n");
+		myprintf("Do we really need this big skb??\n");
 		return osl_pktget(osh, len);
 	}
 
@@ -348,7 +360,7 @@ osl_pktget_static(osl_t *osh, uint len)
 
 	
 	up(&bcm_static_skb->osl_pkt_sem);
-	printk("all static pkt in use!\n");
+	myprintf("all static pkt in use!\n");
 	return osl_pktget(osh, len);
 }
 
@@ -477,7 +489,7 @@ osl_malloc(osl_t *osh, uint size)
 			if (i == MAX_STATIC_BUF_NUM)
 			{
 				up(&bcm_static_buf->static_sem);
-				printk("all static buff in use!\n");
+				myprintf("all static buff in use!\n");
 				goto original;
 			}
 			
@@ -511,7 +523,7 @@ osl_mfree(osl_t *osh, void *addr, uint size)
 #ifdef DHD_USE_STATIC_BUF
 	if (bcm_static_buf)
 	{
-		if ((addr > (void *)bcm_static_buf) && ((unsigned char *)addr
+		if ((addr > (void *)bcm_static_buf) && ((unsigned char *)addr \
 			<= ((unsigned char *)bcm_static_buf + STATIC_BUF_TOTAL_LEN)))
 		{
 			int buf_idx = 0;

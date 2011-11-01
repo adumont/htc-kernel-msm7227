@@ -22,7 +22,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: siutils.h,v 13.197.4.2.4.3.8.16 2010/06/23 21:36:05 Exp $
+ * $Id: siutils.h,v 13.197.4.2.4.3.8.13 2010/03/10 21:34:34 Exp $
  */
 
 
@@ -171,6 +171,12 @@ extern void si_btcgpiowar(si_t *sih);
 extern bool si_deviceremoved(si_t *sih);
 extern uint32 si_socram_size(si_t *sih);
 
+extern int si_bist_socram(si_t *sih, uint32 *biststatus);
+extern int si_bist_arm(si_t *sih, uint32 *biststatus);
+extern int si_bist_cc(si_t *sih, uint32 *biststatus);
+extern int si_bist_sharedcore(si_t *sih, uint32 *biststatus);
+extern int si_bist_d11(si_t *sih, uint32 *biststatus1, uint32 *biststatus2);
+
 extern void si_watchdog(si_t *sih, uint ticks);
 extern void si_watchdog_ms(si_t *sih, uint32 ms);
 extern void *si_gpiosetcore(si_t *sih);
@@ -225,6 +231,7 @@ extern void si_pci_up(si_t *sih);
 extern void si_pcie_war_ovr_disable(si_t *sih);
 extern void si_pcie_extendL1timer(si_t *sih, bool extend);
 extern int si_pci_fixcfg(si_t *sih);
+void si_pmu_res_4319_swctrl_war(si_t *sih, osl_t *osh, bool enable);
 
 
 

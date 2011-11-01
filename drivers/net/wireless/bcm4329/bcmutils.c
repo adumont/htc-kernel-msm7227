@@ -20,7 +20,7 @@
  *      Notwithstanding the above, under no circumstances may you combine this
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
- * $Id: bcmutils.c,v 1.210.4.5.2.4.6.19 2010/04/26 06:05:25 Exp $
+ * $Id: bcmutils.c,v 1.210.4.5.2.4.6.17 2009/11/17 02:20:12 Exp $
  */
 
 #include <typedefs.h>
@@ -216,6 +216,14 @@ pktq_pdeq(struct pktq *pq, int prec)
 	struct pktq_prec *q;
 	void *p;
 
+#ifdef HTC_KlocWork
+    if(prec >= PKTQ_MAX_PREC)
+    {
+        myprintf("[HTCKW] pktq_pdeq: prec >= PKTQ_MAX_PREC\n");
+        return NULL;
+    }
+#endif
+
 	ASSERT(prec >= 0 && prec < pq->num_prec);
 
 	q = &pq->q[prec];
@@ -242,7 +250,12 @@ pktq_pdeq_tail(struct pktq *pq, int prec)
 	void *p, *prev;
 
 	ASSERT(prec >= 0 && prec < pq->num_prec);
-
+#ifdef HTC_KlocWork
+    if( (prec < 0) || (prec >= pq->num_prec) || (prec >= PKTQ_MAX_PREC) ) {
+        myprintf("[HTCKW] pktq_pdeq_tail: prec not valid:%d\n", prec);
+        return NULL;
+    }
+#endif
 	q = &pq->q[prec];
 
 	if ((p = q->head) == NULL)
@@ -345,6 +358,10 @@ pktq_deq(struct pktq *pq, int *prec_out)
 	if (pq->len == 0)
 		return NULL;
 
+#ifdef HTC_KlocWork
+    while(pq->hi_prec >= PKTQ_MAX_PREC)
+        pq->hi_prec--;
+#endif
 	while ((prec = pq->hi_prec) > 0 && pq->q[prec].head == NULL)
 		pq->hi_prec--;
 
@@ -416,6 +433,11 @@ pktq_peek(struct pktq *pq, int *prec_out)
 	if (pq->len == 0)
 		return NULL;
 
+#ifdef HTC_KlocWork
+    while(pq->hi_prec >= PKTQ_MAX_PREC)
+        pq->hi_prec--;
+#endif
+
 	while ((prec = pq->hi_prec) > 0 && pq->q[prec].head == NULL)
 		pq->hi_prec--;
 
@@ -477,6 +499,11 @@ pktq_mdeq(struct pktq *pq, uint prec_bmp, int *prec_out)
 
 	if (pq->len == 0)
 		return NULL;
+
+#ifdef HTC_KlocWork
+    while(pq->hi_prec >= PKTQ_MAX_PREC)
+        pq->hi_prec--;
+#endif
 
 	while ((prec = pq->hi_prec) > 0 && pq->q[prec].head == NULL)
 		pq->hi_prec--;
@@ -892,7 +919,7 @@ prpkt(const char *msg, osl_t *osh, void *p0)
 	void *p;
 
 	if (msg && (msg[0] != '\0'))
-		printf("%s:\n", msg);
+		myprintf("%s:\n", msg);
 
 	for (p = p0; p; p = PKTNEXT(osh, p))
 		prhex(NULL, PKTDATA(osh, p), PKTLEN(osh, p));
@@ -1514,7 +1541,7 @@ prhex(const char *msg, uchar *buf, uint nbytes)
 	uint i;
 
 	if (msg && (msg[0] != '\0'))
-		printf("%s:\n", msg);
+		myprintf("%s:\n", msg);
 
 	p = line;
 	for (i = 0; i < nbytes; i++) {
@@ -1523,14 +1550,14 @@ prhex(const char *msg, uchar *buf, uint nbytes)
 		}
 		p += sprintf(p, "%02x ", buf[i]);
 		if (i % 16 == 15) {
-			printf("%s\n", line);		/* flush line */
+			myprintf("%s\n", line);		/* flush line */
 			p = line;
 		}
 	}
 
 	/* flush last partial line */
 	if (p != line)
-		printf("%s\n", line);
+		myprintf("%s\n", line);
 }
 #endif 
 
@@ -1563,14 +1590,14 @@ printbig(char *buf)
 	while (len > max_len) {
 		c = buf[max_len];
 		buf[max_len] = '\0';
-		printf("%s", buf);
+		myprintf("%s", buf);
 		buf[max_len] = c;
 
 		buf += max_len;
 		len -= max_len;
 	}
 	/* print the remaining string */
-	printf("%s\n", buf);
+	myprintf("%s\n", buf);
 	return;
 }
 
@@ -1789,16 +1816,16 @@ bcm_print_bytes(char *name, const uchar *data, int len)
 	int i;
 	int per_line = 0;
 
-	printf("%s: %d \n", name ? name : "", len);
+	myprintf("%s: %d \n", name ? name : "", len);
 	for (i = 0; i < len; i++) {
-		printf("%02x ", *data++);
+		myprintf("%02x ", *data++);
 		per_line++;
 		if (per_line == 16) {
 			per_line = 0;
-			printf("\n");
+			myprintf("\n");
 		}
 	}
-	printf("\n");
+	myprintf("\n");
 }
 
 /*

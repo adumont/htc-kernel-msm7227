@@ -38,6 +38,6 @@ struct tps65200_platform_data {
 #ifdef CONFIG_TPS65200
 extern int tps_set_charger_ctrl(u32 ctl);
 #else
-static int tps_set_charger_ctrl(u32 ctl) {return 0 ; }
+static int tps_set_charger_ctrl(u32 ctl) {ctl++;return 0 ; }
 #endif
 #endif

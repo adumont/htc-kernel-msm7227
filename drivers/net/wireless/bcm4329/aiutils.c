@@ -2,7 +2,7 @@
  * Misc utility routines for accessing chip-specific features
  * of the SiliconBackplane-based Broadcom chips.
  *
- * Copyright (C) 1999-2010, Broadcom Corporation
+ * Copyright (C) 1999-2009, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -22,7 +22,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: aiutils.c,v 1.6.4.7.4.6 2010/04/21 20:43:47 Exp $
+ * $Id: aiutils.c,v 1.6.4.7.4.5 2009/09/25 00:32:01 Exp $
  */
 
 #include <typedefs.h>
@@ -543,7 +543,12 @@ ai_corereg(si_t *sih, uint coreidx, uint regoff, uint mask, uint val)
 		r = (uint32*) ((uchar*) ai_setcoreidx(&sii->pub, coreidx) + regoff);
 	}
 	ASSERT(r != NULL);
-
+#ifdef HTC_KlocWork
+    if(r == NULL) {
+        myprintf("[HTCKW] r is NULL at ai_corereg\n");
+        return 0;
+    }
+#endif
 	/* mask and set */
 	if (mask || val) {
 		w = (R_REG(sii->osh, r) & ~mask) | val;

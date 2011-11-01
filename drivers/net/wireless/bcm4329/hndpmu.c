@@ -2,7 +2,7 @@
  * Misc utility routines for accessing PMU corerev specific features
  * of the SiliconBackplane-based Broadcom chips.
  *
- * Copyright (C) 1999-2010, Broadcom Corporation
+ * Copyright (C) 1999-2009, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -22,7 +22,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: hndpmu.c,v 1.95.2.17.4.11.2.63 2010/07/21 13:55:09 Exp $
+ * $Id: hndpmu.c,v 1.95.2.17.4.11.2.50 2009/10/26 14:45:51 Exp $
  */
 
 #include <typedefs.h>
@@ -114,8 +114,11 @@ si_sdiod_drive_strength_init(si_t *sih, osl_t *osh, uint32 drivestrength)
 				break;
 			}
 		}
-
-		W_REG(osh, &cc->chipcontrol_addr, 1);
+#ifdef HTC_KlocWork
+    if( cc!= NULL )
+    {
+#endif
+        W_REG(osh, &cc->chipcontrol_addr, 1);
 		cc_data_temp = R_REG(osh, &cc->chipcontrol_data);
 		cc_data_temp &= ~str_mask;
 		drivestrength_sel <<= str_shift;
@@ -124,6 +127,9 @@ si_sdiod_drive_strength_init(si_t *sih, osl_t *osh, uint32 drivestrength)
 
 		PMU_MSG(("SDIO: %dmA drive strength selected, set to 0x%08x\n",
 		         drivestrength, cc_data_temp));
+#ifdef HTC_KlocWork
+    } // cc!=NULL
+#endif
 	}
 
 	/* Return to original core */

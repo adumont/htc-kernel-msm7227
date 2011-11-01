@@ -1,7 +1,7 @@
 /*
  * BCMSDH Function Driver for the native SDIO/MMC driver in the Linux Kernel
  *
- * Copyright (C) 1999-2010, Broadcom Corporation
+ * Copyright (C) 1999-2009, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -47,7 +47,7 @@ extern void sdioh_sdmmc_osfree(sdioh_info_t *sd);
 
 #define SDIOH_ASSERT(exp) \
 	do { if (!(exp)) \
-		printf("!!!ASSERT fail: file %s lines %d", __FILE__, __LINE__); \
+		myprintf("!!!ASSERT fail: file %s lines %d", __FILE__, __LINE__); \
 	} while (0)
 
 #define BLOCK_SIZE_4318 64

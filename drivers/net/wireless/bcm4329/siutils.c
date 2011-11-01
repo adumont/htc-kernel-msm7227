@@ -22,7 +22,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: siutils.c,v 1.662.4.4.4.16.4.28 2010/06/23 21:37:54 Exp $
+ * $Id: siutils.c,v 1.662.4.4.4.16.4.26 2010/02/01 05:51:56 Exp $
  */
 
 #include <typedefs.h>
@@ -190,7 +190,12 @@ si_buscore_setup(si_info_t *sii, chipcregs_t *cc, uint bustype, uint32 savewin,
 
 	cc = si_setcoreidx(&sii->pub, SI_CC_IDX);
 	ASSERT((uintptr)cc);
-
+#ifdef HTC_KlocWork
+    if(cc == NULL){
+        SI_ERROR(("[HTCKW] si_buscore_setup: cc is NULL\n"));
+        return FALSE;
+    }
+#endif
 	/* get chipcommon rev */
 	sii->pub.ccrev = (int)si_corerev(&sii->pub);
 
@@ -354,6 +359,12 @@ si_doattach(si_info_t *sii, uint devid, osl_t *osh, void *regs,
 	 *   If we add other chiptypes (or if we need to support old sdio hosts w/o chipcommon),
 	 *   some way of recognizing them needs to be added here.
 	 */
+#ifdef HTC_KlocWork
+    if(cc == NULL) {
+        SI_ERROR(("[HTCKW] si_doattach: cc is NULL-1\n"));
+        return NULL;
+    }
+#endif
 	w = R_REG(osh, &cc->chipid);
 	sih->socitype = (w & CID_TYPE_MASK) >> CID_TYPE_SHIFT;
 	/* Might as wll fill in chip id rev & pkg */
@@ -394,6 +405,12 @@ si_doattach(si_info_t *sii, uint devid, osl_t *osh, void *regs,
 
 		if (sii->pub.ccrev >= 20) {
 			cc = (chipcregs_t *)si_setcore(sih, CC_CORE_ID, 0);
+#ifdef HTC_KlocWork
+    if(cc == NULL) {
+        SI_ERROR(("[HTCKW] si_doattach: cc is NULL-2\n"));
+        return NULL;
+    }
+#endif
 			W_REG(osh, &cc->gpiopullup, 0);
 			W_REG(osh, &cc->gpiopulldown, 0);
 			si_setcoreidx(sih, origidx);
@@ -855,6 +872,283 @@ si_core_tofixup(si_t *sih)
 		sb_core_tofixup(sih);
 }
 
+int
+si_bist_d11(si_t *sih, uint32 *biststatus1, uint32 *biststatus2)
+{
+	si_info_t *sii;
+	uint origidx;
+    uint intr_val = 0;
+    void *regs;
+    int error = 0;
+    bool wasup;
+    uint32 offset = SBCONFIGOFF + SBTMSTATELOW;
+    uint32 max_res_mask;
+    uint32 pmu_ctrl;
+
+    *biststatus1 = 0;
+    *biststatus2 = 0;
+
+    SI_ERROR(("doing the bist on D11\n"));
+
+    sii = SI_INFO(sih);
+
+    if (CHIPTYPE(sih->socitype) != SOCI_SB) {
+     return 0;
+    }
+
+    /* Block ints and save current core */
+    INTR_OFF(sii, intr_val);
+    origidx = si_coreidx(sih);
+
+    /* Switch to D11 core */
+    if (!(regs = si_setcore(sih, D11_CORE_ID, 0)))
+	    goto done;
+
+    /* Get info for determining size */
+    /* coming out of reset device shoudl have clk enabled, bw set, etc */
+    if (!(wasup = si_iscoreup(sih)))
+        si_core_reset(sih, 0x4F, 0x4F);
+
+    max_res_mask = si_corereg(sih, 0, OFFSETOF(chipcregs_t, max_res_mask), 0, 0);
+    si_corereg(sih, 0, OFFSETOF(chipcregs_t, max_res_mask), ~0, 0x3fffff);
+
+    if (si_corerev(&sii->pub) == 20) {
+        uint32 phy_reset_val;
+        uint32 bist_test_val, bist_status;
+
+        /* XXX: enable the phy PLL */
+        pmu_ctrl = si_corereg(sih, si_coreidx(&sii->pub), 0x1e8, 0, 0);
+        pmu_ctrl |= 0x000010000;
+        si_corereg(sih, si_coreidx(&sii->pub), 0x1e8, ~0, pmu_ctrl);
+        SPINWAIT(((si_corereg(sih, si_coreidx(&sii->pub), 0x1e8, 0, 0) & 0x01000000) == 0),
+                1000000);
+        pmu_ctrl = si_corereg(sih, si_coreidx(&sii->pub), 0x1e8, 0, 0);
+
+        /* take the phy out of reset */
+        phy_reset_val = si_corereg(sih, si_coreidx(&sii->pub), offset, 0, 0);
+        phy_reset_val &= ~(0x0008 << SBTML_SICF_SHIFT);
+        si_corereg(sih, si_coreidx(&sii->pub), offset, ~0, phy_reset_val);
+        phy_reset_val = si_corereg(sih, si_coreidx(&sii->pub), offset, 0, 0);
+
+        /* enable bist first */
+        bist_test_val = si_corereg(sih, si_coreidx(&sii->pub), offset, 0, 0);
+        bist_test_val |= (SICF_BIST_EN << 16);
+        si_corereg(sih, si_coreidx(&sii->pub), offset, ~0, bist_test_val);
+        SPINWAIT(((si_core_sflags(sih, 0, 0) & SISF_BIST_DONE) == 0), 1000000);
+        bist_status = si_core_sflags(sih, 0, 0);
+        SI_ERROR(("status are 0x%08x\n", bist_status));
+        if (bist_status & SISF_BIST_DONE) {
+            if (bist_status & SISF_BIST_ERROR) {
+                error = 1;
+                *biststatus1 = si_corereg(sih,  si_coreidx(&sii->pub), 12, 0, 0);
+                *biststatus2 = si_corereg(sih,  si_coreidx(&sii->pub), 16, 0, 0);
+            }
+        }
+        /* stop the phy pll */
+        pmu_ctrl = si_corereg(sih, si_coreidx(&sii->pub), 0x1e8, 0, 0);
+        pmu_ctrl &= ~0x10000;
+        si_corereg(sih, si_coreidx(&sii->pub), 0x1e8, ~0, pmu_ctrl);
+    }
+
+    /* remove the resource mask */
+    si_corereg(sih, 0, OFFSETOF(chipcregs_t, max_res_mask), ~0, max_res_mask);
+
+    /* Return to previous state and core */
+    if (!wasup)
+        si_core_disable(sih, 0);
+
+    /* Return to previous state and core */
+    si_setcoreidx(sih, origidx);
+done:
+    INTR_RESTORE(sii, intr_val);
+    return error;
+}
+
+int
+si_bist_cc(si_t *sih, uint32 *biststatus)
+{
+    si_info_t *sii;
+    uint origidx;
+    uint intr_val = 0;
+    int error = 0;
+    void *regs;
+    int status;
+    bool wasup;
+
+    sii = SI_INFO(sih);
+
+    SI_ERROR(("doing the bist on ChipC\n"));
+
+    /* Block ints and save current core */
+    INTR_OFF(sii, intr_val);
+    origidx = si_coreidx(sih);
+
+    /* Switch to CC core */
+    if (!(regs = si_setcore(sih, CC_CORE_ID, 0)))
+        goto done;
+
+    /* Get info for determining size */
+    if (!(wasup = si_iscoreup(sih)))
+        si_core_reset(sih, 0, 0);
+
+    status = si_corebist(sih);
+    if (status == BCME_ERROR) {
+        *biststatus = si_corereg(sih,  si_coreidx(&sii->pub), 12, 0, 0);
+            /* XXX: OTP gives the BIST error */
+            *biststatus &= ~(0x1);
+            if (*biststatus)
+                error = 1;
+    }
+
+    /* Return to previous state and core */
+    if (!wasup)
+        si_core_disable(sih, 0);
+    /* Return to previous state and core */
+    si_setcoreidx(sih, origidx);
+    *biststatus = 0;
+done:
+    INTR_RESTORE(sii, intr_val);
+    return error;
+}
+
+int
+si_bist_arm(si_t *sih, uint32 *biststatus)
+{
+    si_info_t *sii;
+    uint origidx;
+    uint intr_val = 0;
+    int error = 0;
+    void *regs;
+    int status;
+    bool wasup;
+
+    sii = SI_INFO(sih);
+
+    SI_ERROR(("doing the bist on ARM\n"));
+
+    /* Block ints and save current core */
+    INTR_OFF(sii, intr_val);
+    origidx = si_coreidx(sih);
+
+    /* Switch to SOCRAM core */
+    if (!(regs = si_setcore(sih, ARMCM3_CORE_ID, 0)))
+        goto done;
+
+    /* Get info for determining size */
+    if (!(wasup = si_iscoreup(sih)))
+        si_core_reset(sih, 0, 0);
+
+    status = si_corebist(sih);
+    if (status == BCME_ERROR) {
+        error = 1;
+        *biststatus = si_corereg(sih,  si_coreidx(&sii->pub), 12, 0, 0);
+    }
+
+    /* Return to previous state and core */
+    if (!wasup)
+        si_core_disable(sih, 0);
+    /* Return to previous state and core */
+    si_setcoreidx(sih, origidx);
+    *biststatus = 0;
+done:
+    INTR_RESTORE(sii, intr_val);
+    return error;
+}
+
+int
+si_bist_sharedcore(si_t *sih, uint32 *biststatus)
+{
+    si_info_t *sii;
+    uint origidx;
+    uint intr_val = 0;
+    int error = 0;
+    void *regs;
+    int status;
+    bool wasup;
+
+    sii = SI_INFO(sih);
+
+    SI_ERROR(("doing the bist on SHAREDCORE\n"));
+
+    /* Block ints and save current core */
+    INTR_OFF(sii, intr_val);
+    origidx = si_coreidx(sih);
+
+    /* Switch to CC core */
+    if (!(regs = si_setcore(sih, SC_CORE_ID, 0)))
+        goto done;
+
+    /* Get info for determining size */
+    if (!(wasup = si_iscoreup(sih)))
+        si_core_reset(sih, 0, 0);
+
+    status = si_corebist(sih);
+    if (status == BCME_ERROR) {
+        error = 1;
+        *biststatus = si_corereg(sih,  si_coreidx(&sii->pub), 12, 0, 0);
+    }
+
+    /* Return to previous state and core */
+    if (!wasup)
+        si_core_disable(sih, 0);
+    /* Return to previous state and core */
+    si_setcoreidx(sih, origidx);
+    *biststatus = 0;
+done:
+    INTR_RESTORE(sii, intr_val);
+    return error;
+}
+
+/* set the core to socram run bist and return bist status back */
+int
+si_bist_socram(si_t *sih, uint32 *biststatus)
+{
+    si_info_t *sii;
+    uint origidx;
+    uint intr_val = 0;
+    sbsocramregs_t *regs;
+    int error = 0;
+    uint status = 0;
+
+    SI_ERROR(("doing the bist on SOCRAM\n"));
+
+    sii = SI_INFO(sih);
+
+    /* Block ints and save current core */
+    INTR_OFF(sii, intr_val);
+    origidx = si_coreidx(sih);
+
+    /* Switch to SOCRAM core */
+    if (!(regs = si_setcore(sih, SOCRAM_CORE_ID, 0)))
+        goto done;
+
+    si_core_reset(sih, SICF_BIST_EN, SICF_BIST_EN);
+
+    /* Wait for bist done */
+    SPINWAIT(((si_core_sflags(sih, 0, 0) & SISF_BIST_DONE) == 0), 100000);
+
+    status = si_core_sflags(sih, 0, 0);
+
+    if (status & SISF_BIST_DONE) {
+        if (status & SISF_BIST_ERROR) {
+            *biststatus = R_REG(sii->osh, &regs->biststat);
+            /* hnd_bist gives errors for ROM bist test, so ignore it */
+            *biststatus &= 0xFFFF;
+            if (!*biststatus)
+                error = 0;
+            else
+                error = 1;
+        }
+    }
+
+    si_core_reset(sih, 0, 0);
+    /* Return to previous state and core */
+    si_setcoreidx(sih, origidx);
+done:
+    INTR_RESTORE(sii, intr_val);
+    return error;
+}
+
 /* Run bist on current core. Caller needs to take care of core-specific bist hazards */
 int
 si_corebist(si_t *sih)
@@ -866,7 +1160,8 @@ si_corebist(si_t *sih)
 	cflags = si_core_cflags(sih, 0, 0);
 
 	/* Set bist & fgc */
-	si_core_cflags(sih, 0, (SICF_BIST_EN | SICF_FGC));
+	//si_core_cflags(sih, 0, (SICF_BIST_EN | SICF_FGC));
+	si_core_cflags(sih, ~0, (SICF_BIST_EN | SICF_FGC | SICF_CLOCK_EN));
 
 	/* Wait for bist done */
 	SPINWAIT(((si_core_sflags(sih, 0, 0) & SISF_BIST_DONE) == 0), 100000);
@@ -1025,7 +1320,11 @@ si_sdio_init(si_t *sih)
 	if (((sih->buscoretype == PCMCIA_CORE_ID) && (sih->buscorerev >= 8)) ||
 	    (sih->buscoretype == SDIOD_CORE_ID)) {
 		uint idx;
+#ifdef HTC_KlocWork
+        sdpcmd_regs_t *sdpregs=NULL;
+#else
 		sdpcmd_regs_t *sdpregs;
+#endif
 
 		/* get the current core index */
 		idx = sii->curidx;
@@ -1039,11 +1338,18 @@ si_sdio_init(si_t *sih)
 		SI_MSG(("si_sdio_init: For PCMCIA/SDIO Corerev %d, enable ints from core %d "
 		        "through SD core %d (%p)\n",
 		        sih->buscorerev, idx, sii->curidx, sdpregs));
-
+#ifdef HTC_KlocWork
+        if(sdpregs != NULL) {
+            /* enable backplane error and core interrupts */
+            W_REG(sii->osh, &sdpregs->hostintmask, I_SBINT);
+            W_REG(sii->osh, &sdpregs->sbintmask, (I_SB_SERR | I_SB_RESPERR | (1 << idx)));
+        }else
+            SI_ERROR(("[HTCKW] si_sdio_init: sdpregs is NULL\n"));
+#else
 		/* enable backplane error and core interrupts */
 		W_REG(sii->osh, &sdpregs->hostintmask, I_SBINT);
 		W_REG(sii->osh, &sdpregs->sbintmask, (I_SB_SERR | I_SB_RESPERR | (1 << idx)));
-
+#endif
 		/* switch back to previous core */
 		si_setcoreidx(sih, idx);
 	}
@@ -1494,7 +1800,9 @@ si_btcgpiowar(si_t *sih)
 
 	cc = (chipcregs_t *)si_setcore(sih, CC_CORE_ID, 0);
 	ASSERT(cc != NULL);
-
+#ifdef HTC_KlocWork
+    if(cc != NULL)
+#endif
 	W_REG(sii->osh, &cc->uart0mcr, R_REG(sii->osh, &cc->uart0mcr) | 0x04);
 
 	/* restore the original index */

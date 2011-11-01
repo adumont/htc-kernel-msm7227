@@ -2,7 +2,7 @@
  * Misc utility routines for accessing chip-specific features
  * of the SiliconBackplane-based Broadcom chips.
  *
- * Copyright (C) 1999-2010, Broadcom Corporation
+ * Copyright (C) 1999-2009, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -22,7 +22,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: sbutils.c,v 1.662.4.10.2.7.4.2 2010/04/19 05:48:48 Exp $
+ * $Id: sbutils.c,v 1.662.4.10.2.7.4.1 2009/09/25 00:32:01 Exp $
  */
 
 #include <typedefs.h>
@@ -410,7 +410,12 @@ sb_corereg(si_t *sih, uint coreidx, uint regoff, uint mask, uint val)
 		r = (uint32*) ((uchar*)sb_setcoreidx(&sii->pub, coreidx) + regoff);
 	}
 	ASSERT(r != NULL);
-
+#ifdef HTC_KlocWork
+    if(r == NULL) {
+        SI_ERROR(("[HTCKW] sb_corereg: r is NULL\n"));
+        return 0;
+    }
+#endif
 	/* mask and set */
 	if (mask || val) {
 		if (regoff >= SBCONFIGOFF) {
@@ -492,10 +497,13 @@ _sb_scan(si_info_t *sii, uint32 sba, void *regs, uint bus, uint32 sbba, uint num
 			uint32 ccrev = sb_corerev(&sii->pub);
 
 			/* determine numcores - this is the total # cores in the chip */
-			if (((ccrev == 4) || (ccrev >= 6)))
+			if (((ccrev == 4) || (ccrev >= 6))) {
+#ifdef HTC_KlocWork
+				if(cc != NULL)
+#endif
 				numcores = (R_REG(sii->osh, &cc->chipid) & CID_CC_MASK) >>
 				        CID_CC_SHIFT;
-			else {
+			} else {
 				/* Older chips */
 				uint chip = sii->pub.chip;
 
@@ -732,10 +740,17 @@ sb_commit(si_t *sih)
 	/* switch over to chipcommon core if there is one, else use pci */
 	if (sii->pub.ccrev != NOREV) {
 		chipcregs_t *ccregs = (chipcregs_t *)si_setcore(sih, CC_CORE_ID, 0);
-
+#ifdef HTC_KlocWork
+        if(ccregs != NULL) {
+            /* do the buffer registers update */
+            W_REG(sii->osh, &ccregs->broadcastaddress, SB_COMMIT);
+            W_REG(sii->osh, &ccregs->broadcastdata, 0x0);
+        }
+#else
 		/* do the buffer registers update */
 		W_REG(sii->osh, &ccregs->broadcastaddress, SB_COMMIT);
 		W_REG(sii->osh, &ccregs->broadcastdata, 0x0);
+#endif
 	} else
 		ASSERT(0);
 

@@ -12,6 +12,13 @@ config BCM4329
 	  If you choose to build a module, it'll be called dhd. Say M if
 	  unsure.
 
+config BCM4329_SOFTAP
+	depends on BCM4329
+	bool "Broadcom 4329 Soft AP function"
+	---help---
+	  BCM4329 soft AP function	
+
+
 config BCM4329_FW_PATH
 	depends on BCM4329
 	string "Firmware path"
@@ -25,18 +32,3 @@ config BCM4329_NVRAM_PATH
 	default "/proc/calibration"
 	---help---
 	  Path to the calibration file.
-
-config BCM4329_ENABLE_CSCAN
-	depends on BCM4329
-	bool "Enable CSCAN"
-	default n
-	---help---
-	  Enable the use of CSCAN methods.
-
-config BCM4329_ALLOW_ARP
-	depends on BCM4329
-	bool "Allow ARP requests"
-	default n
-	---help---
-	  Allow ARP requests to be received by the cpu while in low
-	  power mode.
