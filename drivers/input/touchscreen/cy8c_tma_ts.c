@@ -42,12 +42,20 @@ struct cy8c_ts_data {
 	struct early_suspend early_suspend;
 	uint8_t debug_log_level;
 	uint8_t orient;
+	uint8_t timeout;
+	uint8_t interval;
 	uint8_t diag_command;
 	uint8_t first_pressed;
 	int pre_finger_data[2];
 	uint8_t x_channel;
 	uint8_t y_channel;
 	uint8_t finger_count;
+	uint16_t finger_id;
+	uint8_t p_finger_count;
+	uint16_t p_finger_id;
+	uint16_t *filter_level;
+	uint8_t grip_suppression;
+	uint8_t ambiguous_state;
 };
 
 static struct cy8c_ts_data *private_ts;
@@ -85,7 +93,7 @@ int i2c_cy8c_read(struct i2c_client *client, uint8_t addr, uint8_t *data, uint8_
 		if (ts->wake)
 			ts->wake();
 		else
-			mdelay(10);
+			msleep(10);
 	}
 	if (retry == CY8C_I2C_RETRY_TIMES) {
 		printk(KERN_INFO "i2c_read_block retry over %d\n",
@@ -121,7 +129,7 @@ int i2c_cy8c_write(struct i2c_client *client, uint8_t addr, uint8_t *data, uint8
 		if (ts->wake)
 			ts->wake();
 		else
-			mdelay(10);
+			msleep(10);
 	}
 
 	if (retry == CY8C_I2C_RETRY_TIMES) {
@@ -278,18 +286,17 @@ static ssize_t cy8c_diag_show(struct device *dev,
 		cy8c_init_panel(ts_data);
 		i2c_cy8c_read(ts_data->client, 0x00, &data[0], 7 + num_nodes);
 	}
-	if (ts_data->diag_command == 6 && (data[1] & 0x40) == 0x40) {
-		for (loop_i = 0; loop_i < 10; loop_i++) {
-			i2c_cy8c_write_byte_data(ts_data->client, 0x00,
-				((data[0] ^= BIT(7)) & 0x8F) | (6 << 4));
-			msleep(40);
-
-			i2c_cy8c_read(ts_data->client, 0x00, &data[0], 2);
-			if (!(data[1] & 0x40))
-				break;
-			msleep(10);
-		}
-		i2c_cy8c_read(ts_data->client, 0x00, &data[0], 7 + num_nodes);
+	if (ts_data->diag_command == 6) {
+		if((data[1] & 0x40) == 0x40)
+			count += sprintf(buf + count, "Global IDAC:\n");
+		else
+			count += sprintf(buf + count, "Local IDAC:\n");
+	}
+	else if(ts_data->diag_command == 7) {
+		if((data[1] & 0x40) == 0x40)
+			count += sprintf(buf + count, "RAW count:\n");
+		else
+			count += sprintf(buf + count, "Baseline:\n");
 	}
 	for (loop_i = 7; loop_i < 7 + num_nodes; loop_i++) {
 		count += sprintf(buf + count, "%5d", data[loop_i]);
@@ -329,7 +336,7 @@ static ssize_t cy8c_cal_show(struct device *dev,
 	size_t count = 0;
 	uint8_t diag_cmd = 7;
 	uint8_t data[256];
-	int i;
+	int i, loop_i;
 	uint16_t num_nodes;
 	ts_data = private_ts;
 	memset(data, 0x0, sizeof(data));
@@ -341,16 +348,39 @@ static ssize_t cy8c_cal_show(struct device *dev,
 	i2c_cy8c_read(ts_data->client, 0x00, &data[0], 1);
 	i2c_cy8c_write_byte_data(ts_data->client, 0x00,
 		(data[0] & 0x8F) | (diag_cmd << 4));
-	mdelay(50);
+	msleep(80);
+	for (loop_i = 0; loop_i < 20; loop_i++) {
+		if (!gpio_get_value(ts_data->intr))
+			break;
+		msleep(20);
+	}
 
 	i2c_cy8c_read(ts_data->client, 0x00, &data[0], 1);
 	printk(KERN_INFO "[cal_show]change mode to 0x%X\n", data[0]);
 
-	i2c_cy8c_read(ts_data->client, 0x07, &data[0], num_nodes);
+	i2c_cy8c_read(ts_data->client, 0x00, &data[0], 7 + num_nodes);
+	if ((data[1] & 0x40) == 0x40) {
+		for (i = 0; i < 10; i++) {
+			i2c_cy8c_write_byte_data(ts_data->client, 0x00,
+				((data[0] ^= BIT(7)) & 0x8F) | (diag_cmd << 4));
+			msleep(80);
+			for (loop_i = 0; loop_i < 20; loop_i++) {
+				if (!gpio_get_value(ts_data->intr))
+					break;
+				msleep(20);
+			}
 
-	for (i = 0; i < num_nodes; i++) {
+			i2c_cy8c_read(ts_data->client, 0x00, &data[0], 2);
+			if (!(data[1] & 0x40))
+				break;
+			msleep(10);
+		}
+		i2c_cy8c_read(ts_data->client, 0x00, &data[0], 7 + num_nodes);
+	}
+
+	for (i = 7; i < 7 + num_nodes; i++) {
 		count += sprintf(buf + count, "%5d", data[i]);
-		if ((i + 1) % ts_data->y_channel == 0)
+		if ((i -6) % ts_data->y_channel == 0)
 			count += sprintf(buf + count, "\n");
 	}
 	count += sprintf(buf + count, "\n");
@@ -499,6 +529,11 @@ static int cy8c_init_panel(struct cy8c_ts_data *ts)
 			printk(KERN_ERR "TOUCH_ERR: init failed to check id\n");
 			return -1;
 		}
+	if (ts->timeout)
+		i2c_cy8c_write_byte_data(ts->client, 0x1E, ts->timeout);
+	if (ts->interval)
+		i2c_cy8c_write_byte_data(ts->client, 0x1F, ts->interval);
+
 	i2c_cy8c_read(ts->client, 0x00, &buf, 1);
 	if ((buf & 0x70) == 0x10)
 		i2c_cy8c_write_byte_data(ts->client, 0x00, ((buf ^= BIT(7)) & 0x8F));
@@ -507,10 +542,20 @@ static int cy8c_init_panel(struct cy8c_ts_data *ts)
 	return 0;
 }
 
+static void cy8c_orient(uint16_t *x, uint16_t *y, uint8_t orient)
+{
+	if (orient & 0x01)
+		*x = 1023 - *x;
+	if (orient & 0x02)
+		*y = 1023 - *y;
+	if (orient & 0x04)
+		swap(*x, *y);
+}
+
 static void cy8c_ts_work_func(struct work_struct *work)
 {
 	struct cy8c_ts_data *ts = container_of(work, struct cy8c_ts_data, work);
-	uint8_t buf[32], loop_i;
+	uint8_t buf[32], loop_i, loop_j;
 
 	i2c_cy8c_read(ts->client, 0x00, buf, 32);
 	if (ts->debug_log_level & 0x1) {
@@ -520,6 +565,7 @@ static void cy8c_ts_work_func(struct work_struct *work)
 				printk("\n");
 		}
 	}
+
 	if ((buf[1] & 0x10) == 0x10) {
 		printk(KERN_INFO "Bootloader mode to OP mode\n");
 		if (cy8c_init_panel(ts) < 0)
@@ -527,52 +573,183 @@ static void cy8c_ts_work_func(struct work_struct *work)
 			__func__);
 	}
 	if ((buf[2] & 0x0F) >= 1 && !(buf[2] & 0x10)) {
-		uint16_t x, y, z;
 		int base = 0x03;
-		ts->finger_count = buf[2] & 0x0F;
-		for (loop_i = 0; (loop_i < ts->finger_count) && (loop_i < 4); loop_i++) {
-			x = buf[base] << 8 | buf[base + 1];
-			if (ts->orient & 0x01)
-				x = 1023 - x;
-			y = buf[base + 2] << 8 | buf[base + 3];
-			if (ts->orient & 0x02)
-				y = 1023 - y;
-			if (ts->orient & 0x04)
-				swap(x, y);
-			z = buf[base + 4];
-#ifdef CONFIG_TOUCHSCREEN_COMPATIBLE_REPORT
-			input_report_abs(ts->input_dev, ABS_MT_TOUCH_MAJOR, z);
-			input_report_abs(ts->input_dev, ABS_MT_WIDTH_MAJOR, z);
-			input_report_abs(ts->input_dev, ABS_MT_POSITION_X, x);
-			input_report_abs(ts->input_dev, ABS_MT_POSITION_Y, y);
-			input_mt_sync(ts->input_dev);
-#else
-			input_report_abs(ts->input_dev, ABS_MT_AMPLITUDE, z << 16 | z);
-			input_report_abs(ts->input_dev, ABS_MT_POSITION,
-				(((ts->finger_count - 1) ==  loop_i) ? BIT(31) : 0) | x << 16 | y);
+		int report = -1;
+		uint16_t finger_data[4][4];
+		ts->p_finger_count = ts->finger_count;
+		ts->p_finger_id = ts->finger_id;
+		ts->finger_count = ((buf[2] & 0x0F) > 4) ? 4 : buf[2] & 0x0F;
+		ts->finger_id = buf[8] << 8 | buf[21];
+		if (ts->debug_log_level & 0x4)
+			printk(KERN_INFO "Finger ID: %X, count: %d\n",
+				ts->finger_id, ts->finger_count);
+		if (ts->p_finger_count && (ts->finger_count != ts->p_finger_count ||
+			ts->finger_id != ts->p_finger_id)) {
+			report = 0;
 
-#endif
-			if (!ts->first_pressed) {
-				ts->first_pressed = 1;
-				printk(KERN_INFO "S1@%d,%d\n", x, y);
-			}
-			if (ts->first_pressed == 1) {
-				ts->pre_finger_data[0] = x;
-				ts->pre_finger_data[1] = y;
-			}
+			for (loop_i = ts->p_finger_count < ts->finger_count
+				? ts->p_finger_count : ts->finger_count;
+				loop_i > 0; loop_i--) {
+				for (loop_j = ts->p_finger_count; loop_j > 0; loop_j--) {
+					if (ts->debug_log_level & 0x4)
+						printk(KERN_INFO "i = %d, j = %d, A = %X, B = %X\n",
+							loop_i, loop_j, ((ts->finger_id >> (16 - 4 * loop_i)) & 0x000F),
+							((ts->p_finger_id >> (16 - 4 * loop_j)) & 0x000F));
 
-			if (ts->debug_log_level & 0x2)
-				printk(KERN_INFO "Finger %d=> X:%d, Y:%d w:%d, z:%d\n",
-					loop_i + 1, x, y, z, z);
+					if (((ts->finger_id >> (16 - 4 * loop_i)) & 0x000F)
+						== ((ts->p_finger_id >> (16 - 4 * loop_j)) & 0x000F)) {
+						report = loop_i;
+						break;
+					}
+				}
+				if (report > 0)
+					break;
+			}
+			if (report >= ts->p_finger_count ||
+				report == ts->finger_count || ts->p_finger_count == 0)
+				report = -1;
+		}
+		for (loop_i = 0; loop_i < ts->finger_count; loop_i++) {
+			finger_data[loop_i][0] = buf[base] << 8 | buf[base + 1];
+			finger_data[loop_i][1] = buf[base + 2] << 8 | buf[base + 3];
+			cy8c_orient(&finger_data[loop_i][0], &finger_data[loop_i][1], ts->orient);
+			finger_data[loop_i][2] = buf[base + 4];
+			finger_data[loop_i][3] = buf[base + 1] << 8 | buf[base + 2];
 			if (loop_i % 2 == 1)
 				base += 7;
 			else
 				base += 6;
 		}
+		if (ts->filter_level[0] &&
+			((ts->finger_count > ts->p_finger_count) || report >= 0 || ts->grip_suppression)) {
+			for (loop_i = 0; loop_i < ts->finger_count; loop_i++) {
+				if ((finger_data[loop_i][0] < ts->filter_level[0] ||
+					finger_data[loop_i][0] > ts->filter_level[3]) &&
+					!(ts->grip_suppression & BIT(loop_i)) &&
+					loop_i >= (report < 0 ? ts->p_finger_count : report)) {
+					ts->grip_suppression |= BIT(loop_i);
+				} else if ((finger_data[loop_i][0] < ts->filter_level[1] ||
+					finger_data[loop_i][0] > ts->filter_level[2]) &&
+					(ts->grip_suppression & BIT(loop_i)))
+					ts->grip_suppression |= BIT(loop_i);
+				else if (finger_data[loop_i][0] > ts->filter_level[1] &&
+					finger_data[loop_i][0] < ts->filter_level[2]) {
+					ts->grip_suppression &= ~BIT(loop_i);
+				}
+			}
+			ts->ambiguous_state = 0;
+			for (loop_i = 0; loop_i < ts->finger_count; loop_i++)
+				if (((ts->grip_suppression >> loop_i) & 1) == 1)
+					ts->ambiguous_state++;
+		}
+
+		if (ts->ambiguous_state == ts->finger_count
+			|| ts->ambiguous_state == report) {
+#ifdef CONFIG_TOUCHSCREEN_COMPATIBLE_REPORT
+			input_report_key(ts->input_dev, BTN_TOUCH, 0);
+			input_report_abs(ts->input_dev, ABS_MT_TOUCH_MAJOR, 0);
+#else
+			input_report_key(ts->input_dev, BTN_TOUCH, 0);
+			input_report_abs(ts->input_dev, ABS_MT_AMPLITUDE, 0);
+			input_report_abs(ts->input_dev, ABS_MT_POSITION, 1 << 31);
+#endif
+		} else {
+		if (report >= 0) {
+			if (ts->debug_log_level & 0x4)
+				printk(KERN_INFO "Change: %d\n", report);
+			if (report == 0) {
+#ifdef CONFIG_TOUCHSCREEN_COMPATIBLE_REPORT
+			input_report_key(ts->input_dev, BTN_TOUCH, 1);
+			input_report_abs(ts->input_dev, ABS_MT_TOUCH_MAJOR, 0);
+			input_sync(ts->input_dev);
+#else
+			input_report_key(ts->input_dev, BTN_TOUCH, 1);
+			input_report_abs(ts->input_dev, ABS_MT_AMPLITUDE, 0);
+			input_report_abs(ts->input_dev, ABS_MT_POSITION, 1 << 31);
+#endif
+			} else {
+				for (loop_i = 0; loop_i < report; loop_i++) {
+					if (!(ts->grip_suppression & BIT(loop_i))) {
+#ifdef CONFIG_TOUCHSCREEN_COMPATIBLE_REPORT
+						input_report_key(ts->input_dev, BTN_TOUCH, 1);
+						input_report_abs(ts->input_dev, ABS_MT_TOUCH_MAJOR,
+							finger_data[loop_i][2]);
+						input_report_abs(ts->input_dev, ABS_MT_WIDTH_MAJOR,
+							finger_data[loop_i][2]);
+						input_report_abs(ts->input_dev, ABS_MT_POSITION_X,
+							finger_data[loop_i][0]);
+						input_report_abs(ts->input_dev, ABS_MT_POSITION_Y,
+							finger_data[loop_i][1]);
+						input_report_abs(ts->input_dev, ABS_MT_PRESSURE, finger_data[loop_i][3]);
+						input_mt_sync(ts->input_dev);
+#else
+						input_report_key(ts->input_dev, BTN_TOUCH, 1);
+						input_report_abs(ts->input_dev, ABS_MT_AMPLITUDE,
+							finger_data[loop_i][2] << 16 | finger_data[loop_i][2]);
+						input_report_abs(ts->input_dev, ABS_MT_POSITION,
+							(((report - 1) ==  loop_i) ? BIT(31) : 0)
+							| finger_data[loop_i][0] << 16 | finger_data[loop_i][1]);
+						input_report_abs(ts->input_dev, ABS_MT_PRESSURE, finger_data[loop_i][3]);
+#endif
+						if (ts->debug_log_level & 0x2 && loop_i >= 0)
+							printk(KERN_INFO "Finger %d=> X:%d, Y:%d w:%d, z:%d\n",
+								loop_i + 1, finger_data[loop_i][0], finger_data[loop_i][1],
+								finger_data[loop_i][2], finger_data[loop_i][2]);
+					}
+				}
+			}
+#ifdef CONFIG_TOUCHSCREEN_COMPATIBLE_REPORT
+				input_sync(ts->input_dev);
+#endif
+			base = 3;
+		}
+
+		for (loop_i = 0; loop_i < ts->finger_count; loop_i++) {
+			if (!(ts->grip_suppression & BIT(loop_i))) {
+#ifdef CONFIG_TOUCHSCREEN_COMPATIBLE_REPORT
+				input_report_key(ts->input_dev, BTN_TOUCH, 1);
+				input_report_abs(ts->input_dev, ABS_MT_TOUCH_MAJOR,
+					finger_data[loop_i][2]);
+				input_report_abs(ts->input_dev, ABS_MT_WIDTH_MAJOR,
+					finger_data[loop_i][2]);
+				input_report_abs(ts->input_dev, ABS_MT_POSITION_X,
+					finger_data[loop_i][0]);
+				input_report_abs(ts->input_dev, ABS_MT_POSITION_Y,
+					finger_data[loop_i][1]);
+				input_report_abs(ts->input_dev, ABS_MT_PRESSURE, finger_data[loop_i][3]);
+				input_mt_sync(ts->input_dev);
+#else
+				input_report_key(ts->input_dev, BTN_TOUCH, 1);
+				input_report_abs(ts->input_dev, ABS_MT_AMPLITUDE,
+					finger_data[loop_i][2] << 16 | finger_data[loop_i][2]);
+				input_report_abs(ts->input_dev, ABS_MT_POSITION,
+					(((ts->finger_count - 1) ==  loop_i) ? BIT(31) : 0)
+					| finger_data[loop_i][0] << 16 | finger_data[loop_i][1]);
+				input_report_abs(ts->input_dev, ABS_MT_PRESSURE, finger_data[loop_i][3]);
+#endif
+				if (ts->debug_log_level & 0x2 && loop_i >= 0)
+					printk(KERN_INFO "Finger %d=> X:%d, Y:%d w:%d, z:%d\n",
+						loop_i + 1, finger_data[loop_i][0], finger_data[loop_i][1],
+						finger_data[loop_i][2], finger_data[loop_i][2]);
+				}
+				if (!ts->first_pressed) {
+					ts->first_pressed = 1;
+					printk(KERN_INFO "S1@%d,%d\n",
+						finger_data[0][0], finger_data[0][1]);
+				}
+				if (ts->first_pressed == 1) {
+					ts->pre_finger_data[0] = finger_data[0][0];
+					ts->pre_finger_data[1] = finger_data[0][1];
+				}
+			}
+		}
 	} else {
-		if ((buf[2] & 0x0F) == 0)
-			ts->finger_count = 0;
-			cy8c_data_toggle(ts);
+		ts->finger_count = 0;
+		ts->p_finger_count = 0;
+		ts->p_finger_id = 0x1FFF;
+		ts->grip_suppression = 0;
+		cy8c_data_toggle(ts);
+		input_report_key(ts->input_dev, BTN_TOUCH, 1);
 #ifdef CONFIG_TOUCHSCREEN_COMPATIBLE_REPORT
 		input_report_abs(ts->input_dev, ABS_MT_TOUCH_MAJOR, 0);
 #else
@@ -581,7 +758,8 @@ static void cy8c_ts_work_func(struct work_struct *work)
 #endif
 		if (ts->first_pressed == 1) {
 			ts->first_pressed = 2;
-			printk(KERN_INFO "E1@%d, %d\n",
+			printk(KERN_INFO "E%d@%d, %d\n",
+				(ts->finger_id >> 12) & 0x000F,
 				ts->pre_finger_data[0] , ts->pre_finger_data[1]);
 		}
 
@@ -690,8 +868,11 @@ static int cy8c_ts_probe(struct i2c_client *client,
 			pdata++;
 		ts->intr = pdata->gpio_irq;
 		ts->orient = pdata->orient;
+		ts->timeout = pdata->timeout;
+		ts->interval = pdata->interval;
 		dev_info(&client->dev, "orient: %d\n", ts->orient);
 		ts->wake = pdata->wake;
+		ts->filter_level = pdata->filter_level;
 		if (ts->wake)
 			gpio_request(ts->intr, "touch-intr");
 	}
@@ -712,7 +893,7 @@ static int cy8c_ts_probe(struct i2c_client *client,
 
 	set_bit(EV_SYN, ts->input_dev->evbit);
 	set_bit(EV_ABS, ts->input_dev->evbit);
-	set_bit(EV_KEY, ts->input_dev->evbit);
+	set_bit(EV_KEY, ts->input_dev->keybit);
 
 	set_bit(KEY_BACK, ts->input_dev->keybit);
 	set_bit(KEY_HOME, ts->input_dev->keybit);
@@ -726,16 +907,15 @@ static int cy8c_ts_probe(struct i2c_client *client,
 		pdata->abs_x_min, pdata->abs_x_max, 0, 0);
 	input_set_abs_params(ts->input_dev, ABS_MT_POSITION_Y,
 		pdata->abs_y_min, pdata->abs_y_max, 0, 0);
-	input_set_abs_params(ts->input_dev, ABS_MT_TOUCH_MAJOR,
-		pdata->abs_pressure_min, pdata->abs_pressure_max, 0, 0);
-	input_set_abs_params(ts->input_dev, ABS_MT_WIDTH_MAJOR,
-		pdata->abs_width_min, pdata->abs_width_max, 0, 0);
-
+	input_set_abs_params(ts->input_dev, ABS_MT_TOUCH_MAJOR, 0, 255, 0, 0);
+	input_set_abs_params(ts->input_dev, ABS_MT_WIDTH_MAJOR, 0, 30, 0, 0);
+	input_set_abs_params(ts->input_dev, ABS_MT_PRESSURE, 0, 255, 0, 0); 
 #ifndef CONFIG_TOUCHSCREEN_COMPATIBLE_REPORT
 	input_set_abs_params(ts->input_dev, ABS_MT_AMPLITUDE,
 			0, ((pdata->abs_pressure_max << 16) | pdata->abs_width_max), 0, 0);
 		input_set_abs_params(ts->input_dev, ABS_MT_POSITION,
 			0, (BIT(31) | (pdata->abs_x_max << 16) | pdata->abs_y_max), 0, 0);
+	input_set_abs_params(ts->input_dev, ABS_MT_PRESSURE, 0, 255, 0, 0);
 #endif
 
 	ret = input_register_device(ts->input_dev);
@@ -825,7 +1005,7 @@ static int cy8c_ts_suspend(struct i2c_client *client, pm_message_t mesg)
 	if (ret && ts->use_irq)
 		enable_irq(client->irq);
 
-	if (!ts->finger_count) {
+	if (!ts->p_finger_count) {
 		if (ts->wake)
 			ts->wake();
 		if (!gpio_get_value(ts->intr))
@@ -835,6 +1015,9 @@ static int cy8c_ts_suspend(struct i2c_client *client, pm_message_t mesg)
 	printk(KERN_INFO "%s: %x, %x\n", __func__, buf[0], buf[1]);
 
 	ts->first_pressed = 0;
+	ts->grip_suppression = 0;
+	ts->p_finger_count = 0;
+	ts->finger_count = 0;
 
 	if ((buf[1] & 0x10) == 0x10)
 		if (cy8c_init_panel(ts) < 0)
