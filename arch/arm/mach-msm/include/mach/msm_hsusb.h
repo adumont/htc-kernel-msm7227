@@ -129,6 +129,7 @@ struct msm_hsusb_platform_data {
 	int id_pin_irq;
 	bool enable_car_kit_detect;
 	__u8 accessory_detect;
+	__u8 use_microp_adc;
 	bool dock_detect;
 
 	int ac_9v_gpio;

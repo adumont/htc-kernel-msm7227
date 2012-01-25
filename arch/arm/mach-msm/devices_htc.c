@@ -179,8 +179,8 @@ static struct resource msm_kgsl_resources[] = {
 		.flags	= IORESOURCE_MEM,
 	},
 	{
-#ifdef CONFIG_ARCH_MSM7X30
 		.name   = "kgsl_yamato_irq",
+#ifdef CONFIG_ARCH_MSM7X30
 		.start  = INT_GRP_3D,
 		.end    = INT_GRP_3D,
 #else
@@ -226,6 +226,31 @@ static struct kgsl_platform_data kgsl_pdata = {
 	.grp3d_clk_name = "grp_clk",
 	.grp2d0_clk_name = "grp_2d_clk",
 };
+#else	/* 7x27 */
+static struct kgsl_platform_data kgsl_pdata = {
+	.high_axi_3d = 160000,
+	.max_grp2d_freq = 0,
+	.min_grp2d_freq = 0,
+	.set_grp2d_async = NULL,
+	.max_grp3d_freq = 0,
+	.min_grp3d_freq = 0,
+	.set_grp3d_async = NULL,
+	.imem_clk_name = "imem_clk",
+	.grp3d_clk_name = "grp_clk",
+	.grp3d_pclk_name = "grp_pclk",
+	.grp2d0_clk_name = NULL,
+	.idle_timeout_3d = HZ/2,
+	.idle_timeout_2d = 0,
+#ifdef CONFIG_KGSL_PER_PROCESS_PAGE_TABLE
+	.pt_va_size = SZ_32M,
+	/* Maximum of 32 concurrent processes */
+	.pt_max_count = 32,
+#else
+	.pt_va_size = SZ_128M,
+	/* We only ever have one pagetable for everybody */
+	.pt_max_count = 1,
+#endif
+};
 #endif
 
 static struct platform_device msm_kgsl_device = {
@@ -233,11 +258,9 @@ static struct platform_device msm_kgsl_device = {
 	.id		= -1,
 	.resource	= msm_kgsl_resources,
 	.num_resources	= ARRAY_SIZE(msm_kgsl_resources),
-#ifdef CONFIG_ARCH_MSM7X30
 	.dev = {
 		.platform_data = &kgsl_pdata,
 	},
-#endif
 };
 
 #if !defined(CONFIG_ARCH_MSM7X30)
@@ -306,7 +329,7 @@ void __init msm_add_mem_devices(struct msm_pmem_setting *setting)
 		platform_device_register(&ram_console_device);
 	}
 
-#if defined(CONFIG_GPU_MSM_KGSL)&& !defined(CONFIG_ARCH_MSM8X60)
+#if defined(CONFIG_GPU_MSM_KGSL) && !defined(CONFIG_ARCH_MSM8X60)
 	if (setting->kgsl_size) {
 		msm_kgsl_resources[1].start = setting->kgsl_start;
 		msm_kgsl_resources[1].end = setting->kgsl_start
@@ -637,6 +660,12 @@ __setup("androidboot.serialno=", board_serialno_setup);
 char *board_serialno(void)
 {
 	return board_sn;
+}
+
+static int sku_id;
+int board_get_sku_tag()
+{
+	return sku_id;
 }
 
 static int sku_id;

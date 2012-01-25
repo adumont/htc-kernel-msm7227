@@ -23,9 +23,9 @@
 #include <linux/leds.h>
 #include <linux/switch.h>
 #include <linux/cy8c_tma_ts.h>
-#include <linux/himax8250.h>
 #include <linux/akm8975.h>
 #include <linux/bma150.h>
+#include <linux/bma250.h>
 #include <linux/cm3628.h>
 #include <linux/sysdev.h>
 #include <linux/android_pmem.h>
@@ -79,6 +79,14 @@
 #include "proc_comm.h"
 #include "../../../drivers/staging/android/timed_gpio.h"
 
+#ifdef CONFIG_TOUCHSCREEN_HIMAX_8250
+#include <linux/himax8250.h>
+#endif
+
+#ifdef CONFIG_TOUCHSCREEN_HIMAX_8526A
+#include <linux/himax8526a.h>
+#endif
+
 void msm_init_irq(void);
 void msm_init_gpio(void);
 void config_marvel_camera_on_gpios(void);
@@ -120,6 +128,16 @@ static struct htc_headset_microp_platform_data htc_headset_microp_data_xc = {
 	.remote_enable_pin	= 0,
 	.adc_channel		= 0x01,
 	.adc_remote		= {0, 33, 38, 102, 152, 224},
+};
+
+/* HTC_HEADSET_MICROP Driver */
+static struct htc_headset_microp_platform_data
+		htc_headset_microp_data_b14_xb = {
+	.remote_int		= 1 << 13,
+	.remote_irq		= MSM_uP_TO_INT(13),
+	.remote_enable_pin	= 0,
+	.adc_channel		= 0x01,
+	.adc_remote		= {0, 33, 38, 102, 114, 204},
 };
 
 static struct platform_device htc_headset_microp = {
@@ -225,6 +243,17 @@ static struct bma150_platform_data marvel_g_sensor_pdata = {
 	.chip_layout = 0,
 };
 
+static struct bma250_platform_data gsensor_bma250_platform_data = {
+	.chip_layout = 0,
+};
+
+static struct i2c_board_info i2c_bma250_devices[] = {
+	{
+		I2C_BOARD_INFO(BMA250_I2C_NAME, 0x30 >> 1),
+		.platform_data = &gsensor_bma250_platform_data,
+	},
+};
+
 static struct platform_device microp_devices[] = {
 	{
 		.name		= "leds-microp",
@@ -248,11 +277,37 @@ static struct platform_device microp_devices[] = {
 	},
 };
 
+static struct platform_device microp_devices_B14[] = {
+	{
+		.name		= "leds-microp",
+		.id		= -1,
+		.dev		= {
+			.platform_data	= &microp_leds_data,
+		},
+	},
+	{
+		.name	= "HTC_HEADSET_MGR",
+		.id	= -1,
+		.dev	= {
+			.platform_data	= &htc_headset_mgr_data,
+		},
+	},
+};
+
 static struct microp_i2c_platform_data microp_data = {
 	.num_functions   = ARRAY_SIZE(microp_functions),
 	.microp_function = microp_functions,
 	.num_devices = ARRAY_SIZE(microp_devices),
 	.microp_devices = microp_devices,
+	.gpio_reset = MARVEL_GPIO_UP_RESET_N,
+	.spi_devices = SPI_GSENSOR,
+};
+
+static struct microp_i2c_platform_data microp_data_B14 = {
+	.num_functions   = ARRAY_SIZE(microp_functions),
+	.microp_function = microp_functions,
+	.num_devices = ARRAY_SIZE(microp_devices_B14),
+	.microp_devices = microp_devices_B14,
 	.gpio_reset = MARVEL_GPIO_UP_RESET_N,
 	.spi_devices = SPI_GSENSOR,
 };
@@ -291,7 +346,7 @@ static int marvel_ts_cy8c_reset(void)
 
 struct cy8c_i2c_platform_data marvel_ts_cy8c_data[] = {
 	{
-		.version = 0x0D,
+		.version = 0x0A,
 		.abs_x_min = 0,
 		.abs_x_max = 1023,
 		.abs_y_min = 0,
@@ -318,6 +373,7 @@ struct cy8c_i2c_platform_data marvel_ts_cy8c_data[] = {
 		.gpio_irq = MARVEL_GPIO_TP_ATT_N,
 	},
 };
+#ifdef CONFIG_TOUCHSCREEN_HIMAX_8250
 struct himax_i2c_platform_data marvel_ts_himax_data[] = {
 	{
 		.version = 0x00,
@@ -388,7 +444,258 @@ struct himax_i2c_platform_data marvel_ts_himax_data[] = {
 		.command_e1 = { 0xE1, 0x08},
 	},
 };
+#endif
 
+#ifdef CONFIG_TOUCHSCREEN_HIMAX_8526A
+static int marvel_ts_himax_power(int on)
+{
+	printk(KERN_INFO "%s():\n", __func__);
+	if (on)
+		gpio_set_value(MARVEL_V_TP_3V3_EN, 1);
+
+	return 0;
+}
+
+static void marvel_ts_himax_reset(void)
+{
+	printk(KERN_INFO "%s():\n", __func__);
+	gpio_direction_output(MARVEL_GPIO_TP_RST_N, 0);
+	mdelay(10);
+	gpio_direction_output(MARVEL_GPIO_TP_RST_N, 1);
+}
+
+static int marvel_ts_himax_loadSensorConfig(struct i2c_client *client, struct himax_i2c_platform_data **pdata, struct himax_config_init_api *i2c_api);
+
+struct himax_i2c_platform_data marvel_ts_himax_data[] = {
+	{
+		.slave_addr = 0x90,
+		.version = 0x00,
+		.abs_x_min = 0,
+		.abs_x_max = 1024,
+		.abs_y_min = 0,
+		.abs_y_max = 948,
+		.abs_pressure_min = 0,
+		.abs_pressure_max = 256,
+		.abs_width_min = 0,
+		.abs_width_max = 256,
+		.tw_id = 0,/* Marvel will use only one profile */
+		.event_htc_enable = 1,
+		.gpio_irq = MARVEL_GPIO_TP_ATT_N,
+		.cable_config = { 0x90, 0x00},
+		.power = marvel_ts_himax_power,
+		.loadSensorConfig = marvel_ts_himax_loadSensorConfig,
+		.reset = marvel_ts_himax_reset,
+		.c1 	= { 0x36, 0x0F, 0x53 },
+		.c2 	= { 0xDD, 0x04, 0x02 },
+		.c3 	= { 0x37, 0xFF, 0x08, 0xFF, 0x08 },
+		.c4 	= { 0x39, 0x03 },
+		.c5 	= { 0x3A, 0x00 },
+		.c6 	= { 0x6E, 0x04 },
+		.c7 	= { 0x76, 0x01, 0x36 },
+		.c8 	= { 0x78, 0x03 },
+		.c9 	= { 0x7A, 0x00, 0xD8, 0x0C },
+		.c10 	= { 0x7D, 0x00, 0x04, 0x0A, 0x0A, 0x04 },
+		.c11	= { 0x7F, 0x05, 0x01, 0x01, 0x01, 0x01, 0x07, 0x0D, 0x02, 0x0B, 0x02,
+			    0x0B, 0x02, 0x0B, 0x00 },
+		.c12 	= { 0xC2, 0x11, 0x00, 0x00, 0x00 },
+		.c13 	= { 0xC5, 0x0A, 0x1D, 0x00, 0x10, 0x1D, 0x1F, 0x0B },
+		.c14 	= { 0xC6, 0x11, 0x10, 0x18 },
+		.c15	= { 0xCB, 0x01, 0xF5, 0xFF, 0xFF, 0x01, 0x00, 0x05, 0x00, 0x05, 0x00 },
+		.c16 	= { 0xD4, 0x01, 0x04, 0x07 },
+		.c17	= { 0x62, 0x01, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00 },
+		.c18	= { 0x63, 0x00, 0x23, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+		.c19	= { 0x64, 0x03, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00 },
+		.c20	= { 0x65, 0x23, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x23, 0x00 },
+		.c21	= { 0x66, 0x24, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x24, 0x00 },
+		.c22	= { 0x67, 0x13, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x13, 0x00 },
+		.c23	= { 0x68, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+		.c24	= { 0x69, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+		.c25	= { 0x6A, 0x23, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x23, 0x00 },
+		.c26	= { 0x6B, 0x23, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x23, 0x00 },
+		.c27	= { 0x6C, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x24, 0x00 },
+		.c28	= { 0x6D, 0x10, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00 },
+		.c29	= { 0xC9, 0x00, 0x00, 0x00, 0x00, 0x13, 0x13, 0x12, 0x12, 0x16, 0x16,
+			    0x17, 0x17, 0x2D, 0x2D, 0x23, 0x23, 0x0D, 0x0D, 0x11, 0x11, 0x1A,
+			    0x1A, 0x19, 0x19 },
+		.c30	= { 0x8A, 0x08, 0xFF, 0x18, 0xFF, 0xFF, 0x12, 0x17, 0xFF, 0xFF, 0x11,
+			    0x0A, 0xFF, 0xFF, 0x0B, 0x00, 0x13, 0xFF, 0x01, 0xFF, 0x0E, 0x0D,
+			    0x0F, 0x0C, 0xFF, 0xFF, 0x10, 0xFF, 0xFF, 0xFF, 0x16, 0xFF, 0xFF,
+			    0xFF, 0x03, 0x02, 0xFF, 0xFF, 0x09, 0x04, 0xFF, 0xFF, 0x07, 0x14,
+			    0x06, 0x05, 0x15, 0xFF, 0xFF },
+		.c31	= { 0x8C, 0x30, 0x0C, 0x0A, 0x0C, 0x08, 0x08, 0x08, 0x32, 0x24 },
+		.c32	= { 0xE9, 0x00 },
+		.c33	= { 0xEA, 0x0F, 0x0A, 0x00, 0x24 },
+		.c34	= { 0xEB, 0x2C, 0x22, 0x07, 0x83 },
+		.c35	= { 0xEC, 0x00, 0x0F, 0x0A, 0x20, 0x20, 0x00, 0x00, 0x00, 0x00 },
+		.enterLeave	= { 0xEF, 0x11, 0x22 },
+		.c37	= { 0xF0, 0x40 },
+		.averageDistance	= { 0xF1, 0x02, 0x04, 0x06, 0x06 },
+		.c39	= { 0xF2, 0x0A, 0x3C, 0x14, 0x3C },
+		.c40	= { 0xF3, 0x0F },
+		.c41	= { 0xF4, 0x7D, 0x96, 0x3E, 0x88 },
+		.c42	= { 0xF6, 0x00, 0x00, 0x14, 0x2A, 0x05 },
+		.c43	= { 0xF7, 0x05, 0x04, 0x00, 0x04, 0x00 },
+		.c44	= { 0x8D, 0xA0, 0x5A },
+
+		/* Added for Check Sum function 20110706 */
+		.c45 	= { 0xAB, 0x01},
+		.c46 	= { 0xAB, 0x10},
+
+		/* Added for Check Sum Golden Pattern */
+		.c47 	= { 0xAC, 0x7D, 0x46 },
+
+		/* Reset Check Sum funciton */
+		.c48 	= { 0xAB, 0x00},
+	},
+};
+
+static int marvel_ts_himax_loadSensorConfig(struct i2c_client *client, struct himax_i2c_platform_data **pdata, struct himax_config_init_api *i2c_api)
+{
+	uint8_t act_len;
+	int result;
+	char Data[1] = {0};
+	char cmd[3] = {0};
+	int retryTimes = 0;/*, i = 0;*/
+	const int firstRetry = 3;
+	const int normalRetry = 10;
+
+start:
+	if (!pdata || !client || !i2c_api) {
+		printk(KERN_ERR "[TOUCH_ERR]%s: Necessary parameters are null!\n", __func__);
+		return -1;
+	}
+	result = i2c_api->i2c_himax_write_command(client, 0x81, firstRetry);
+	if (result < 0) {
+		printk(KERN_INFO "No Himax chip inside\n");
+		return -EIO;
+	} else {
+		hr_msleep(240);
+
+		cmd[0] = 0x36;
+		cmd[1] = 0x0F;
+		cmd[2] = 0x53;
+		i2c_api->i2c_himax_master_write(client, cmd , sizeof(cmd), normalRetry);
+		cmd[0] = 0xDD;
+		cmd[1] = 0x04;
+		cmd[2] = 0x02;
+		i2c_api->i2c_himax_master_write(client, cmd , sizeof(cmd), normalRetry);
+		i2c_api->i2c_himax_write_command(client, 0x83, normalRetry);
+		hr_msleep(50);
+		i2c_api->i2c_himax_write_command(client, 0x82, normalRetry);
+		i2c_api->i2c_himax_write_command(client, 0xF5, normalRetry);
+		i2c_api->i2c_himax_read_command(client, 1, Data, &act_len, normalRetry);
+#if 0		/* Marvel will use only one profile, disable profile switching */
+
+		for (i = 0; i < sizeof(marvel_ts_himax_data)/sizeof(struct himax_i2c_platform_data); ++i) {
+			if (marvel_ts_himax_data[i].tw_id == (Data[0] & 0x03)) {
+				*pdata = marvel_ts_himax_data + i;
+				break;
+			}
+		}
+
+		/* Marvel will use only one profile, disable touch sensor id log */
+		switch (Data[0] & 0x03) {
+		case 0x00:/* YFO */
+			printk(KERN_INFO "%s: YFO touch window detected.\n", __func__);
+			break;
+		case 0x01:/* Wintek */
+			printk(KERN_INFO "%s: Wintek touch window detected.\n", __func__);
+			break;
+		case 0x03:/* Cando */
+			printk(KERN_INFO "%s: Cando touch window detected.\n", __func__);
+		}
+		if (i == sizeof(marvel_ts_himax_data)/sizeof(struct himax_i2c_platform_data)) {
+			printk(KERN_ERR "[TOUCH_ERR]%s: Couldn't find the matched profile!\n", __func__);
+			return -1;
+		}
+#endif
+		*pdata = marvel_ts_himax_data;
+
+		printk(KERN_INFO "%s: start initializing Sensor configs\n", __func__);
+	}
+
+	do {
+		if (retryTimes == 5) {
+			marvel_ts_himax_reset();
+			hr_msleep(50);
+			++retryTimes;
+			goto start;
+		} else if (retryTimes == 11) {
+			printk(KERN_ERR "[TOUCH_ERR]%s: Himax configuration checksum error!\n", __func__);
+			return -EIO;
+		}
+
+		/* Start Check Sum */
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c48, sizeof((*pdata)->c48), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c45, sizeof((*pdata)->c45), normalRetry);
+
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c1, sizeof((*pdata)->c1), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c2, sizeof((*pdata)->c2), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c3, sizeof((*pdata)->c3), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c4, sizeof((*pdata)->c4), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c5, sizeof((*pdata)->c5), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c6, sizeof((*pdata)->c6), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c7, sizeof((*pdata)->c7), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c8, sizeof((*pdata)->c8), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c9, sizeof((*pdata)->c9), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c10, sizeof((*pdata)->c10), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c11, sizeof((*pdata)->c11), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c12, sizeof((*pdata)->c12), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c13, sizeof((*pdata)->c13), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c14, sizeof((*pdata)->c14), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c15, sizeof((*pdata)->c15), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c16, sizeof((*pdata)->c16), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c17, sizeof((*pdata)->c17), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c18, sizeof((*pdata)->c18), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c19, sizeof((*pdata)->c19), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c20, sizeof((*pdata)->c20), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c21, sizeof((*pdata)->c21), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c22, sizeof((*pdata)->c22), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c23, sizeof((*pdata)->c23), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c24, sizeof((*pdata)->c24), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c25, sizeof((*pdata)->c25), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c26, sizeof((*pdata)->c26), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c27, sizeof((*pdata)->c27), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c28, sizeof((*pdata)->c28), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c29, sizeof((*pdata)->c29), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c30, sizeof((*pdata)->c30), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c31, sizeof((*pdata)->c31), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c32, sizeof((*pdata)->c32), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c33, sizeof((*pdata)->c33), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c34, sizeof((*pdata)->c34), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c35, sizeof((*pdata)->c35), normalRetry);
+		/*i2c_api->i2c_himax_master_write(client, (*pdata)->c36, sizeof((*pdata)->c36), normalRetry);*/
+		i2c_api->i2c_himax_master_write(client, (*pdata)->enterLeave, sizeof((*pdata)->enterLeave), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c37, sizeof((*pdata)->c37), normalRetry);
+		/*i2c_api->i2c_himax_master_write(client, (*pdata)->c38, sizeof((*pdata)->c38), normalRetry);*/
+		i2c_api->i2c_himax_master_write(client, (*pdata)->averageDistance, sizeof((*pdata)->averageDistance), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c39, sizeof((*pdata)->c39), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c40, sizeof((*pdata)->c40), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c41, sizeof((*pdata)->c41), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c42, sizeof((*pdata)->c42), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c43, sizeof((*pdata)->c43), normalRetry);
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c44, sizeof((*pdata)->c44), normalRetry);
+
+		/* Stop Check Sum */
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c46, sizeof((*pdata)->c46), normalRetry);
+
+		/* Enter Golden Pattern */
+		i2c_api->i2c_himax_master_write(client, (*pdata)->c47, sizeof((*pdata)->c47), normalRetry);
+
+		/* Read Hardware Check Sum */
+		i2c_api->i2c_himax_write_command(client, 0xAB, normalRetry);
+		i2c_api->i2c_himax_read_command(client, 1, Data, &act_len, normalRetry);
+		++retryTimes;
+	/* Check Software and Hardware Check Sum */
+	} while (Data[0] != 0x10);
+
+	i2c_api->i2c_himax_write_command(client, 0x83, normalRetry);
+	hr_msleep(100);
+
+	return result;
+}
+
+#endif
 static int marvel_phy_init_seq[] =
 {
 	0x2C, 0x31,
@@ -416,7 +723,7 @@ static void marvel_disable_usb_charger(void)
 
 #ifdef CONFIG_USB_ANDROID
 static uint32_t usb_ID_PIN_input_table[] = {
-	PCOM_GPIO_CFG(MARVEL_GPIO_USB_ID_PIN, 0, GPIO_INPUT, GPIO_PULL_UP, GPIO_4MA),
+	PCOM_GPIO_CFG(MARVEL_GPIO_USB_ID_PIN, 0, GPIO_INPUT, GPIO_NO_PULL, GPIO_4MA),
 };
 
 static uint32_t usb_ID_PIN_ouput_table[] = {
@@ -566,14 +873,64 @@ static struct i2c_board_info i2c_devices[] = {
 		.platform_data = &marvel_ts_cy8c_data,
 		.irq = MSM_GPIO_TO_INT(MARVEL_GPIO_TP_ATT_N)
 	},
+#ifdef CONFIG_TOUCHSCREEN_HIMAX_8250
 	{
 		I2C_BOARD_INFO(HIMAX8250_NAME, 0x90 >> 1),
 		.platform_data = &marvel_ts_himax_data,
 		.irq = MSM_GPIO_TO_INT(MARVEL_GPIO_TP_ATT_N)
 	},
+#endif
+#ifdef CONFIG_TOUCHSCREEN_HIMAX_8526A
+	{
+		I2C_BOARD_INFO(HIMAX8526A_NAME, 0x90 >> 1),
+		.platform_data = &marvel_ts_himax_data,
+		.irq = MSM_GPIO_TO_INT(MARVEL_GPIO_TP_ATT_N)
+	},
+#endif
 	{
 		I2C_BOARD_INFO(MICROP_I2C_NAME, 0xCC >> 1),
 		.platform_data = &microp_data,
+		.irq = MARVEL_GPIO_TO_INT(MARVEL_GPIO_UP_INT_N)
+	},
+	{
+		I2C_BOARD_INFO("tps65200", 0xD4 >> 1),
+		.platform_data = &tps65200_data,
+	},
+	{
+		I2C_BOARD_INFO(CM3628_I2C_NAME, 0xC0 >> 1),
+		.platform_data = &cm3628_pdata,
+		.irq = MSM_GPIO_TO_INT(MARVEL_GPIO_PROXIMITY_INT),
+	},
+	{
+		I2C_BOARD_INFO(AKM8975_I2C_NAME, 0x1A >> 1),
+		.platform_data = &compass_platform_data,
+		.irq = MARVEL_GPIO_TO_INT(MARVEL_GPIO_COMPASS_RDY),
+	},
+};
+
+static struct i2c_board_info i2c_devices_B14[] = {
+	{
+		I2C_BOARD_INFO(CYPRESS_TMA_NAME, 0x67),
+		.platform_data = &marvel_ts_cy8c_data,
+		.irq = MSM_GPIO_TO_INT(MARVEL_GPIO_TP_ATT_N)
+	},
+#ifdef CONFIG_TOUCHSCREEN_HIMAX_8250
+	{
+		I2C_BOARD_INFO(HIMAX8250_NAME, 0x90 >> 1),
+		.platform_data = &marvel_ts_himax_data,
+		.irq = MSM_GPIO_TO_INT(MARVEL_GPIO_TP_ATT_N)
+	},
+#endif
+#ifdef CONFIG_TOUCHSCREEN_HIMAX_8526A
+	{
+		I2C_BOARD_INFO(HIMAX8526A_NAME, 0x90 >> 1),
+		.platform_data = &marvel_ts_himax_data,
+		.irq = MSM_GPIO_TO_INT(MARVEL_GPIO_TP_ATT_N)
+	},
+#endif
+	{
+		I2C_BOARD_INFO(MICROP_I2C_NAME, 0xCC >> 1),
+		.platform_data = &microp_data_B14,
 		.irq = MARVEL_GPIO_TO_INT(MARVEL_GPIO_UP_INT_N)
 	},
 	{
@@ -1021,13 +1378,17 @@ static struct attribute_group marvel_properties_attr_group = {
 static void __init marvel_init(void)
 {
 	int rc;
+	int sku_id = 0;
 	char *cid = NULL;
 	struct kobject *properties_kobj;
 
 	printk("marvel_init() revision = 0x%X\n", system_rev);
 	msm_clock_init();
 	board_get_cid_tag(&cid);
+	sku_id = board_get_sku_tag();
 
+	if (sku_id)
+		printk(KERN_INFO "Marvel show_skuid: 0x%x\n", sku_id);
 	/* for bcm */
 	bt_export_bd_address();
 
@@ -1080,6 +1441,10 @@ static void __init marvel_init(void)
 		android_usb_pdata.product_id;
 	android_usb_pdata.serial_number = board_serialno();
 	msm_hsusb_pdata.serial_number = board_serialno();
+	if ((sku_id & 0xFFF00) == 0x2AB00) {
+		msm_hsusb_pdata.accessory_detect = 2; /* detect by ADC */
+		msm_hsusb_pdata.use_microp_adc = 1;
+	}
 	msm_device_hsusb.dev.platform_data = &msm_hsusb_pdata;
 	config_marvel_usb_id_gpios(0);
 	platform_device_register(&msm_device_hsusb);
@@ -1105,7 +1470,7 @@ static void __init marvel_init(void)
 
 	printk(KERN_INFO "[HS_BOARD] (%s) system_rev = %d\n", __func__,
 	       system_rev);
-	if (system_rev > 1) {
+	if (system_rev > 1 || ((sku_id & 0xFFF00) == 0x2AB00)) {
 		htc_headset_microp.dev.platform_data =
 			&htc_headset_microp_data_xc;
 		htc_headset_mgr_data.headset_config_num =
@@ -1113,13 +1478,32 @@ static void __init marvel_init(void)
 		htc_headset_mgr_data.headset_config = htc_headset_mgr_config;
 		printk(KERN_INFO "[HS_BOARD] (%s) Set MEMS config\n", __func__);
 	}
+	if (system_rev >= 1 && ((sku_id & 0xFFF00) == 0x2AB00)) {
+		htc_headset_microp.dev.platform_data =
+			&htc_headset_microp_data_b14_xb;
+		printk(KERN_INFO "[HS_BOARD] (%s) Set B14 ADC\n", __func__);
+	}
 
 	/* probe camera driver */
 	i2c_register_board_info(0, i2c_camera_devices, ARRAY_SIZE(i2c_camera_devices));
 
 	msm_device_i2c_init();
 	platform_add_devices(devices, ARRAY_SIZE(devices));
-	i2c_register_board_info(0, i2c_devices, ARRAY_SIZE(i2c_devices));
+
+	if ((sku_id & 0xFFF00) == 0x2AB00) {
+		printk(KERN_INFO "Marvel#B14: use BMA250\n");
+		i2c_register_board_info(0, i2c_devices_B14,
+				ARRAY_SIZE(i2c_devices_B14));
+
+		/* probe g-sensor driver */
+		i2c_register_board_info(0, i2c_bma250_devices,
+		ARRAY_SIZE(i2c_bma250_devices));
+
+	} else {
+		printk(KERN_INFO "Marvel: use BMA023\n");
+		i2c_register_board_info(0, i2c_devices,
+				ARRAY_SIZE(i2c_devices));
+	}
 
 	marvel_init_panel();
 
@@ -1149,18 +1533,8 @@ static void __init marvel_map_io(void)
 	/* 7x27 has 256KB L2 cache:
 	64Kb/Way and 4-Way Associativity;
 	evmon/parity/share disabled. */
-	if ((SOCINFO_VERSION_MAJOR(socinfo_get_version()) > 1)
-		|| ((SOCINFO_VERSION_MAJOR(socinfo_get_version()) == 1)
-		&& (SOCINFO_VERSION_MINOR(socinfo_get_version()) >= 3)))
-		{
-			/* R/W latency: 4 cycles; */
-			l2x0_init(MSM_L2CC_BASE, 0x0006801B, 0xfe000000);
-			printk("Marvel_init L2-cache latency 4 cyc for 7x27-t\n");
-		}else{
-		/* R/W latency: 3 cycles; */
 	l2x0_init(MSM_L2CC_BASE, 0x00068012, 0xfe000000);
-			printk("Marvel_init L2-cache latency 3 cyc for 7x27\n");
-		}
+	printk(KERN_INFO "Marvel_init L2-cache latency 3 cyc for 7x27\n");
 #endif
 }
 
