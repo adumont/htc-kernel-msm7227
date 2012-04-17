@@ -611,12 +611,6 @@ int board_get_sku_tag()
 	return sku_id;
 }
 
-static int sku_id;
-int board_get_sku_tag()
-{
-	return sku_id;
-}
-
 #define ATAG_SKUID 0x4d534D73
 int __init parse_tag_skuid(const struct tag *tags)
 {
