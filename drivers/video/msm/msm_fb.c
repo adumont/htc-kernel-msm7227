@@ -1106,10 +1106,25 @@ static struct file_operations debug_fops = {
 static void setup_fb_info(struct msmfb_info *msmfb)
 {
 	struct fb_info *fb_info = msmfb->fb;
+	int *id = (int *)&msmfb->panel->interface_type;
 	int r;
 
 	/* finish setting up the fb_info struct */
-	strncpy(fb_info->fix.id, "msmfb", 16);
+#if defined(CONFIG_MSM_MDP22)
+	snprintf(fb_info->fix.id, sizeof(fb_info->fix.id), "msmfb22_%x", (__u32) *id);
+#elif defined(CONFIG_MSM_MDP30)
+	snprintf(fb_info->fix.id, sizeof(fb_info->fix.id), "msmfb30_%x", (__u32) *id);
+#elif defined(CONFIG_MSM_MDP302)
+	snprintf(fb_info->fix.id, sizeof(fb_info->fix.id), "msmfb302_%x", (__u32) *id);
+#elif defined(CONFIG_MSM_MDP303)
+	snprintf(fb_info->fix.id, sizeof(fb_info->fix.id), "msmfb303_%x", (__u32) *id);
+#elif defined(CONFIG_MSM_MDP31)
+	snprintf(fb_info->fix.id, sizeof(fb_info->fix.id), "msmfb31_%x", (__u32) *id);
+#elif defined(CONFIG_MSM_MDP40)
+	snprintf(fb_info->fix.id, sizeof(fb_info->fix.id), "msmfb40_%x", (__u32) *id);
+#else
+#error "CONFIG_FB_MSM_MDP undefined!"
+#endif
 	fb_info->fix.ypanstep = 1;
 
 	fb_info->fbops = &msmfb_ops;
